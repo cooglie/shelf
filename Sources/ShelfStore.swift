@@ -15,6 +15,16 @@ import Foundation
 
 final class ShelfStore: ObservableObject {
 
+    /// Physischer Storage-Ordner für abgelegte Dateien.
+    /// (~/Library/Application Support/Schelf/Shelf)
+    private let storageDir: URL = {
+        let fm = FileManager.default
+        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = support.appendingPathComponent("Schelf/Shelf", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
     /// Eine Ablage-Datei mit zwischengespeicherten Metadaten.
     struct Item: Identifiable, Equatable {
         let id = UUID()
@@ -105,14 +115,40 @@ final class ShelfStore: ObservableObject {
         add(urls: urls)
     }
 
+    /// Dateien in die Ablage aufnehmen — physisch in den Schelf-Storage verschieben
+    /// (Original wird aus der Quelle entfernt). Bei Verzeichnissen/ungleichem Volume
+    /// über FileManager move (cross-volume automatisch Copy+Delete).
     func add(urls: [URL], persist: Bool = true) {
         var existing = Set(items.map { $0.url })
-        for url in urls where !existing.contains(url) {
-            items.append(makeItem(for: url))
-            existing.insert(url)
+        for url in urls {
+            let stored = ingest(url: url)
+            guard let stored = stored, !existing.contains(stored) else { continue }
+            items.append(makeItem(for: stored))
+            existing.insert(stored)
         }
         applySort()
         if persist { saveBookmarks() }
+    }
+
+    /// Verschiebt eine Datei/Ordner in den Schelf-Storage. Liefert die neue URL zurück.
+    /// Befindet sich die Quelle bereits im Storage, wird sie unverändert übernommen.
+    private func ingest(url: URL) -> URL? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return nil }
+
+        // Bereits im Storage? Nicht nochmal verschieben.
+        if url.path.hasPrefix(storageDir.path) { return url }
+
+        let dest = storageDir.appendingPathComponent(url.lastPathComponent)
+        let finalDest = fm.fileExists(atPath: dest.path) ? uniqueName(for: url, in: storageDir) : dest
+        do {
+            try fm.moveItem(at: url, to: finalDest)
+            return finalDest
+        } catch {
+            // Cross-Volume oder keine Rechte: kein Ingest möglich — Quelle bleibt unverändert,
+            // wir referenzieren nur (Fallback, damit Drag-in nie still fehlschlägt).
+            return url
+        }
     }
 
     /// Datei-Picker (für den +-Button).
@@ -134,9 +170,11 @@ final class ShelfStore: ObservableObject {
         let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
         let size: Int64
         var mod = Date()
-        if exists, let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
-            size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
-            if let d = attrs[.modificationDate] as? Date { mod = d }
+        if exists {
+            // Verzeichnisse: rekursive Summe über alle Inhalte (sonst 0).
+            size = isDir.boolValue ? recursiveSize(of: url)
+                                   : ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0)
+            if let d = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date { mod = d }
         } else {
             size = 0
         }
@@ -147,6 +185,22 @@ final class ShelfStore: ObservableObject {
                     modDate: mod, icon: icon, thumbnail: thumb, addedOrder: addCounter)
     }
 
+    /// Rekursive Größe eines Verzeichnisses (Bytes über alle regulären Dateien).
+    private func recursiveSize(of url: URL) -> Int64 {
+        let fm = FileManager.default
+        var total: Int64 = 0
+        guard let enumerator = fm.enumerator(at: url,
+                                             includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+                                             options: [.skipsHiddenFiles]) else { return 0 }
+        for case let fileURL as URL in enumerator {
+            if let v = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+               v.isRegularFile == true, let s = v.fileSize {
+                total += Int64(s)
+            }
+        }
+        return total
+    }
+
     // MARK: - Entfernen
 
     func remove(at offsets: IndexSet) {
@@ -155,6 +209,7 @@ final class ShelfStore: ObservableObject {
     }
 
     func remove(_ item: Item) {
+        trash(url: item.url)
         items.removeAll { $0.id == item.id }
         saveBookmarks()
     }
@@ -162,13 +217,23 @@ final class ShelfStore: ObservableObject {
     /// Entfernt die übergebenen Items (Bulk).
     func remove(items toRemove: [Item]) {
         let ids = Set(toRemove.map { $0.id })
+        for it in toRemove { trash(url: it.url) }
         items.removeAll { ids.contains($0.id) }
         saveBookmarks()
     }
 
     func clear() {
+        for it in items { trash(url: it.url) }
         items.removeAll()
         settings.clearBookmarks()
+    }
+
+    /// Datei aus dem Schelf-Storage in den Papierkorb verschieben.
+    /// Externe (nur referenzierte) Dateien werden nicht gelöscht.
+    private func trash(url: URL) {
+        guard url.path.hasPrefix(storageDir.path) else { return }
+        var resultURL: NSURL?
+        try? FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
     }
 
     // MARK: - Refresh
@@ -232,6 +297,8 @@ final class ShelfStore: ObservableObject {
         }
 
         if !copy {
+            // Verschobene Dateien aus dem Schelf-Storage entfernen (falls sie dort lagen).
+            for u in doneURLs { trash(url: u) }
             items.removeAll { doneURLs.contains($0.url) }
             saveBookmarks()
         }

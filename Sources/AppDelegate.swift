@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: ShelfStore!
     private let settings = AppSettings.shared
     private var bag = Set<AnyCancellable>()
+    private let shakeDetector = ShakeDetector()
 
     // MARK: - Lifecycle
 
@@ -33,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupStatusItem()
         registerHotkey()
+        setupShakeDetector()
 
         // Bei Sortierungs- oder Persistenzänderungen reagieren.
         settings.$panelOpacity
@@ -49,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         unregisterHotkey()
+        shakeDetector.stop()
         panel.saveFrameToSettings()
     }
 
@@ -102,6 +105,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             panel.show()
         }
+    }
+
+    // MARK: - Shake-to-open
+
+    /// Schütteln der Maus öffnet das Panel (nur wenn es gerade versteckt ist).
+    private func setupShakeDetector() {
+        shakeDetector.onShake = { [weak self] in
+            guard let self = self, self.panel.isVisible == false else { return }
+            self.panel.show()
+        }
+        shakeDetector.start()
     }
 
     // MARK: - Globaler Hotkey (konfigurierbar)
