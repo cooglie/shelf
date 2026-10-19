@@ -229,8 +229,8 @@ struct ShelfView: View {
                   onOpenDefault: { store.open(item) },
                   onOpenWith: { store.openWith(item) },
                   onToggleSelect: { toggleSelect(item.id) })
-            .gesture(TapGesture().onEnded { toggleSelect(item.id) })
-            .gesture(TapGesture(count: 2).onEnded { openQuickLook(item.url) })
+            .simultaneousGesture(TapGesture().onEnded { toggleSelect(item.id) })
+            .simultaneousGesture(TapGesture(count: 2).onEnded { openQuickLook(item.url) })
     }
 
     private var emptyState: some View {
@@ -408,8 +408,13 @@ private struct ShelfCell: View {
             Button("Aus Ablage entfernen") { onRemove() }
         }
         // Drag-out: Datei zurück in Finder/ andere Apps ziehen.
+        // WICHTIG: Das Panel nutzt isMovableByWindowBackground, daher würde
+        // AppKit jeden Drag als Fenster-Verschiebe interpretieren. Die Zelle
+        // muss mouseDownCanMoveWindow=false zurückgeben, damit .onDrag feuert.
+        .background(NonMovableView())
         .onDrag {
             let provider = NSItemProvider(object: item.url as NSURL)
+            provider.suggestedName = item.displayName
             return provider
         }
     }
@@ -435,6 +440,21 @@ private struct ShelfCell: View {
                 .frame(width: 40, height: 40)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - NonMovableView (verhindert Fenster-Verschiebe über die Zelle, damit Drag-out feuert)
+
+private struct NonMovableView: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let v = NonMoveView()
+        v.wantsLayer = false
+        return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class NonMoveView: NSView {
+        override var mouseDownCanMoveWindow: Bool { false }
     }
 }
 
