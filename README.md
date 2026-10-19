@@ -4,7 +4,27 @@ Eine schwebende, immer im Vordergrund liegende Ablage: Dateien reinziehen, samme
 als Stapel kopieren oder verschieben, Vorschauen anzeigen — alles aus einem eleganten,
 nativem SwiftUI-Panel, das per globalem Shortcut (⌘⇧D) ein- und ausgeblendet wird.
 
-## Funktionen (v1)
+## Funktionen (v2)
+
+### Neu in v2 (15 Features)
+
+1. **Ablage-Persistenz** — Inhalte bleiben über Neustarts erhalten (URL-Bookmarks).
+2. **Multi-Select** — mehrere Dateien per Klick auswählen, Bulk-Aktionen wirken nur auf die Auswahl.
+3. **Suche/Filter** — nach Name live filtern.
+4. **Sortierung** — Name, Größe, Datum, Hinzugefügt (↕).
+5. **Drag-out** — Dateien aus der Ablage zurück in Finder/andere Apps ziehen.
+6. **Opazitäts-Regler** — Hintergrund-Transparenz einstellen (30–100 %).
+7. **Gesamtgröße** — Summe der Ablage im Footer.
+8. **QuickLook-Navigation** — ← / → blättert durch alle Vorschauen.
+9. **Öffnen** — Datei in Standard-App öffnen (Kontextmenü).
+10. **Öffnen mit …** — App-Wähler über Datei-Picker.
+11. **Frame-Persistenz** — Position & Größe des Panels werden gespeichert.
+12. **Einstellungen** — Fenster mit Opazität, Persistenz, Login-Start, Hotkey-Info.
+13. **+ Button** — Dateien über NSOpenPanel hinzufügen.
+14. **Refresh** — Metadaten & Thumbnails neu einlesen.
+15. **Tastatur** — ⌫ entfernt Auswahl, ⎋ hebt Auswahl auf.
+
+### Funktionen (v1, weiterhin enthalten)
 
 - **Dateien auf eine schwebende Ablage ziehen** — Drag & Drop aus dem Finder oder
   beliebigen Apps; mehrere Dateien gleichzeitig; Duplikate werden erkannt.

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# build.sh — Kompiliert Schelf (Universal Binary: arm64 + x86_64, macOS 11+)
+# build.sh — Kompiliert Schelf (Universal Binary: arm64 + x86_64, macOS 12+)
 # und baut das .app-Bundle inkl. Icon. Legt das fertige App auf den Desktop.
 #
 # Nutzung:  cd Schelf && bash build.sh
@@ -16,7 +16,7 @@ DEPLOY="12.0"
 DEPLOY_X86="12.0"
 
 # Frameworks, die wir brauchen.
-FRAMEWORKS="-framework AppKit -framework SwiftUI -framework Foundation -framework Quartz -framework QuickLookThumbnailing -framework Carbon"
+FRAMEWORKS="-framework AppKit -framework SwiftUI -framework Foundation -framework Quartz -framework QuickLookThumbnailing -framework Carbon -framework Combine -framework ServiceManagement"
 
 echo "=== Schelf Build (Universal: arm64 + x86_64, macOS $DEPLOY+) ==="
 echo "SDK: $SDK"

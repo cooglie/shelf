@@ -5,6 +5,8 @@
 //  Schwebendes, always-on-top Panel (über allen Spaces), transparente Titlebar,
 //  draggable. Kapselt das SwiftUI-ShelfView als contentView.
 //
+//  v2: Frame-Persistenz, Opazität aus AppSettings, QuickLook über alle Items.
+//
 
 import AppKit
 import SwiftUI
@@ -12,10 +14,14 @@ import SwiftUI
 final class ShelfPanel: NSPanel {
 
     private let store: ShelfStore
+    private let settings = AppSettings.shared
 
     init(store: ShelfStore) {
         self.store = store
-        let frame = NSRect(x: 0, y: 0, width: 320, height: 420)
+
+        // Gespeicherten Frame laden oder Default rechts oben.
+        let savedFrame = settings.panelFrame
+        let frame = savedFrame ?? NSRect(x: 0, y: 0, width: 320, height: 420)
 
         super.init(
             contentRect: frame,
@@ -32,13 +38,12 @@ final class ShelfPanel: NSPanel {
         level = .floating
         hidesOnDeactivate = false
         isOpaque = false
-        backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.92)
+        updateOpacity()
         isReleasedWhenClosed = false
         hasShadow = true
-        minSize = NSSize(width: 240, height: 200)
-        maxSize = NSSize(width: 520, height: 900)
+        minSize = NSSize(width: 240, height: 240)
+        maxSize = NSSize(width: 640, height: 1100)
 
-        // SwiftUI-View einbetten.
         let hosting = NSHostingView(
             rootView: ShelfView(store: store)
                 .environment(\.openQuickLook, OpenQuickLookAction { [weak self] url in
@@ -47,14 +52,21 @@ final class ShelfPanel: NSPanel {
         )
         hosting.translatesAutoresizingMaskIntoConstraints = false
         contentView = hosting
+
+        // Frame nach Positionierung sichern.
+        setFrameAutosaveName("SchelfPanel")
     }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    /// Zeigt das Panel an einer sinnvollen Position (rechts oben) falls noch nie positioniert.
+    /// Opazität aus Settings anwenden (von ShelfView aus aufrufbar).
+    func updateOpacity() {
+        backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(settings.panelOpacity)
+    }
+
     func show() {
-        if frame.origin == .zero {
+        if frame.origin == .zero, settings.panelFrame == nil {
             if let screen = NSScreen.main {
                 let f = NSRect(
                     x: screen.frame.maxX - frame.width - 24,
@@ -69,6 +81,10 @@ final class ShelfPanel: NSPanel {
         NSApp.activate(ignoringOtherApps: false)
     }
 
+    func saveFrameToSettings() {
+        settings.panelFrame = self.frame
+    }
+
     // MARK: - QuickLook
 
     private var quickLookController: QuickLookWindowController?
@@ -77,6 +93,11 @@ final class ShelfPanel: NSPanel {
         if quickLookController == nil {
             quickLookController = QuickLookWindowController()
         }
-        quickLookController?.show(urls: [url])
+        // Alle Items in Reihenfolge übergeben, das gewählte zuerst.
+        var urls = store.sortedItems().map { $0.url }
+        if let idx = urls.firstIndex(of: url) {
+            urls.insert(urls.remove(at: idx), at: 0)
+        }
+        quickLookController?.show(urls: urls.isEmpty ? [url] : urls)
     }
 }
