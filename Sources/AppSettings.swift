@@ -80,6 +80,9 @@ final class AppSettings: ObservableObject {
 
     private var bag = Set<AnyCancellable>()
 
+    /// Aktive Security-Scoped-Zugriffe; beim Beenden oder Überschreiben freigegeben.
+    private var activeSecurityScopes: [URL] = []
+
     // MARK: Init
 
     private init() {
@@ -182,24 +185,58 @@ final class AppSettings: ObservableObject {
         defaults.set(data, forKey: Key.bookmarks)
     }
 
+    /// Lädt persistierte Bookmarks und startet Security-Scoped-Zugriffe.
+    /// Stale Bookmarks werden erneuert und neu gespeichert. Zugriffsentzug
+    /// (startAccessing… == false) wird behandelt — die URL wird übersprungen.
     func loadBookmarks() -> [URL] {
         guard persistShelf,
               let arr = defaults.array(forKey: Key.bookmarks) as? [Data] else { return [] }
         var urls: [URL] = []
+        var refreshed: [Data] = []
+        var anyStale = false
+
         for b in arr {
             var stale = false
-            if let u = try? URL(resolvingBookmarkData: b,
-                                options: [.withSecurityScope],
-                                relativeTo: nil,
-                                bookmarkDataIsStale: &stale) {
-                _ = u.startAccessingSecurityScopedResource()
-                urls.append(u)
+            guard let u = try? URL(resolvingBookmarkData: b,
+                                   options: [.withSecurityScope],
+                                   relativeTo: nil,
+                                   bookmarkDataIsStale: &stale) else { continue }
+            // Paarige Nutzung: start nur, wenn es gelingt; stop erfolgt via stopAllSecurityScopes().
+            guard u.startAccessingSecurityScopedResource() else {
+                // Berechtigung entzogen / nicht erneuerbar → überspringen, nicht crashen.
+                continue
+            }
+            activeSecurityScopes.append(u)
+            urls.append(u)
+
+            if stale {
+                anyStale = true
+                if let nb = try? u.bookmarkData(options: [.withSecurityScope],
+                                                includingResourceValuesForKeys: nil,
+                                                relativeTo: nil) {
+                    refreshed.append(nb)
+                } else {
+                    refreshed.append(b)   // Erneuerung fehlgeschlagen → alte Bookmark behalten.
+                }
+            } else {
+                refreshed.append(b)
             }
         }
+        if anyStale { defaults.set(refreshed, forKey: Key.bookmarks) }
         return urls
     }
 
+    /// Beendet alle aktiven Security-Scoped-Zugriffe (paarig zu startAccessing…).
+    /// Beim App-Start vorherige Scopes freigeben, bevor neue geladen werden.
+    func stopAllSecurityScopes() {
+        for u in activeSecurityScopes {
+            u.stopAccessingSecurityScopedResource()
+        }
+        activeSecurityScopes.removeAll()
+    }
+
     func clearBookmarks() {
+        stopAllSecurityScopes()
         defaults.removeObject(forKey: Key.bookmarks)
     }
 }

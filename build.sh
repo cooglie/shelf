@@ -3,6 +3,12 @@
 # build.sh — Kompiliert Schelf (Universal Binary: arm64 + x86_64, macOS 12+)
 # und baut das .app-Bundle inkl. Icon. Legt das fertige App auf den Desktop.
 #
+# Sicherheit:
+#   - Kein automatisches Entfernen der Quarantäne-Markierung (Gatekeeper-Schutz
+#     bleibt intakt). Lokale Builds sind ohnehin nicht quarantäne-markiert.
+#   - rm -rf nur gegen validierte, eindeutige Pfade innerhalb des Build-Ordners.
+#   - Ziel auf dem Desktop wird erst nach erfolgreichem Build atomar ersetzt.
+#
 # Nutzung:  cd Schelf && bash build.sh
 #
 set -euo pipefail
@@ -22,8 +28,31 @@ echo "=== Schelf Build (Universal: arm64 + x86_64, macOS $DEPLOY+) ==="
 echo "SDK: $SDK"
 echo ""
 
+# --- Pfad-Validierung vor jedem Löschen ---
+# APP_BUNDLE muss strikt innerhalb von BUILD liegen; weder leer noch ein Symlink.
+safe_rm() {
+    local target="$1"
+    local parent="$2"
+    if [[ -z "$target" || -z "$parent" ]]; then
+        echo "safe_rm: leerer Pfad — abgebrochen." >&2; exit 1
+    fi
+    # Kanonischen Parent-Pfad bilden.
+    local real_parent
+    real_parent="$(cd "$parent" 2>/dev/null && pwd -P)" || {
+        echo "safe_rm: Parent existiert nicht ($parent) — abgebrochen." >&2; exit 1
+    }
+    case "$target/" in
+        "$real_parent/"*) : ;;   # OK: target liegt unter parent
+        *) echo "safe_rm: '$target' liegt nicht unter '$real_parent' — abgebrochen." >&2; exit 1 ;;
+    esac
+    if [[ -L "$target" ]]; then
+        echo "safe_rm: '$target' ist ein Symlink — abgebrochen." >&2; exit 1
+    fi
+    rm -rf "$target"
+}
+
 mkdir -p "$BUILD"
-rm -rf "$APP_BUNDLE"
+safe_rm "$APP_BUNDLE" "$BUILD"
 
 # Swift-Quellen sammeln.
 SOURCES=$(find "$SRC" -name '*.swift' | sort)
@@ -99,18 +128,35 @@ if [[ -f "$ROOT/Resources/AppIcon.icns" ]]; then
     cp "$ROOT/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 fi
 
-# Quarantine-Flag entfernen + ad-hoc signieren.
-xattr -d com.apple.quarantine "$APP_BUNDLE" 2>/dev/null || true
+# Ad-hoc signieren. KEIN xattr -d com.apple.quarantine:
+# Die Quarantäne-Markierung ist ein Gatekeeper-Sicherheitsmerkmal für
+# heruntergeladene Apps und bleibt unangetastet. Lokale Builds tragen sie ohnehin nicht.
 codesign --force --deep --sign - "$APP_BUNDLE"
 
-# --- Auf den Desktop legen ---
-DESKTOP="$HOME/Desktop"
+# --- Auf den Desktop legen (erst nach erfolgreichem Build ersetzen) ---
+DESKTOP="$(cd "$HOME/Desktop" && pwd -P)"
 TARGET="$DESKTOP/Schelf.app"
 echo ""
 echo "Lege App auf den Desktop…"
-rm -rf "$TARGET"
-cp -R "$APP_BUNDLE" "$TARGET"
-xattr -d com.apple.quarantine "$TARGET" 2>/dev/null || true
+# Nur das eigene App-Bundle überschreiben; Validierung, dass der Pfad stimmt.
+if [[ -z "$TARGET" || "$TARGET" != "$DESKTOP/Schelf.app" || -L "$TARGET" ]]; then
+    echo "Unerwarteter Zielpfad: '$TARGET' — abgebrochen." >&2; exit 1
+fi
+# Bestehendes Ziel nach Backup verschieben (atomar), dann Neues kopieren.
+if [[ -d "$TARGET" ]]; then
+    mv "$TARGET" "$TARGET.replacing.$$.tmp"
+fi
+# ditto kopiert das Bundle sauber (Resource-Forks/Metadaten intakt).
+ditto "$APP_BUNDLE" "$TARGET"
+# Erfolg prüfen: Executable muss vorhanden sein.
+if [[ -f "$TARGET/Contents/MacOS/Schelf" ]]; then
+    rm -rf "$TARGET.replacing.$$.tmp" 2>/dev/null || true
+else
+    echo "Build-Output fehlt im Ziel — altes Ziel wiederhergestellt." >&2
+    rm -rf "$TARGET"
+    [[ -d "$TARGET.replacing.$$.tmp" ]] && mv "$TARGET.replacing.$$.tmp" "$TARGET"
+    exit 1
+fi
 
 echo ""
 echo "✅ Fertig: $TARGET"

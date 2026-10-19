@@ -53,10 +53,19 @@ final class ShelfStore: ObservableObject {
     @Published private(set) var items: [Item] = []
     @Published var lastError: String?
     @Published var searchText: String = ""
+    /// Zuletzt verschobene (Ingest-) Aktion; nil sobald Undo nicht mehr möglich.
+    @Published private(set) var lastUndoableIngest: IngestUndo?
 
     private let pasteboardReader = PasteboardReader()
     private var addCounter = 0
     private var bag = Set<AnyCancellable>()
+
+    /// Merkt sich für eine Ingest-Aktion die Ziel-→Quelle-Zuordnung, um sie
+    /// rückgängig zu machen (Datei zurück an den Ursprungsort verschieben).
+    struct IngestUndo {
+        let moves: [(stored: URL, original: URL)]   // stored = neuer Pfad im Storage
+        var count: Int { moves.count }
+    }
 
     let settings = AppSettings.shared
 
@@ -116,39 +125,113 @@ final class ShelfStore: ObservableObject {
     }
 
     /// Dateien in die Ablage aufnehmen — physisch in den Schelf-Storage verschieben
-    /// (Original wird aus der Quelle entfernt). Bei Verzeichnissen/ungleichem Volume
-    /// über FileManager move (cross-volume automatisch Copy+Delete).
+    /// (Original wird aus der Quelle entfernt). Fehler werden nicht mehr silent
+    /// geschluckt, sondern in `lastError` gemeldet; die betreffende Datei wird
+    /// dann gar nicht aufgenommen (keine halbfertigen Referenzen).
     func add(urls: [URL], persist: Bool = true) {
         var existing = Set(items.map { $0.url })
+        var undoMoves: [(URL, URL)] = []   // (stored, original)
+        var errors: [String] = []
+
         for url in urls {
-            let stored = ingest(url: url)
-            guard let stored = stored, !existing.contains(stored) else { continue }
-            items.append(makeItem(for: stored))
-            existing.insert(stored)
+            // Bereits im Storage → nur referenzieren, nichts verschieben.
+            if url.path.hasPrefix(storageDir.path) {
+                if !existing.contains(url) {
+                    items.append(makeItem(for: url))
+                    existing.insert(url)
+                }
+                continue
+            }
+            do {
+                let stored = try ingest(url: url)
+                guard !existing.contains(stored) else { continue }
+                items.append(makeItem(for: stored))
+                existing.insert(stored)
+                undoMoves.append((stored, url))
+            } catch {
+                errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        if !undoMoves.isEmpty {
+            lastUndoableIngest = IngestUndo(moves: undoMoves.map {
+                (stored: $0.0, original: $0.1)
+            })
         }
         applySort()
         if persist { saveBookmarks() }
+        if !errors.isEmpty { lastError = errors.joined(separator: "\n") }
     }
 
-    /// Verschiebt eine Datei/Ordner in den Schelf-Storage. Liefert die neue URL zurück.
-    /// Befindet sich die Quelle bereits im Storage, wird sie unverändert übernommen.
-    private func ingest(url: URL) -> URL? {
+    /// Macht die letzte Ingest-Aktion rückgängig: verschiebt die Dateien aus dem
+    /// Schelf-Storage zurück an ihren Ursprungsort und entfernt sie aus der Ablage.
+    func undoLastAdd() {
+        guard let undo = lastUndoableIngest, !undo.moves.isEmpty else { return }
         let fm = FileManager.default
-        guard fm.fileExists(atPath: url.path) else { return nil }
+        var errors: [String] = []
+        var undoneURLs: Set<URL> = []
 
-        // Bereits im Storage? Nicht nochmal verschieben.
+        for move in undo.moves {
+            do {
+                // Ursprung ggf. uniquifizieren, falls inzwischen belegt.
+                let original = fm.fileExists(atPath: move.original.path)
+                    ? uniqueName(for: move.original, in: move.original.deletingLastPathComponent())
+                    : move.original
+                try fm.moveItem(at: move.stored, to: original)
+                undoneURLs.insert(move.stored)
+            } catch {
+                errors.append("\(move.stored.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        items.removeAll { undoneURLs.contains($0.url) }
+        lastUndoableIngest = nil
+        saveBookmarks()
+        if !errors.isEmpty { lastError = errors.joined(separator: "\n") }
+    }
+
+    /// Verschiebt eine Datei/Ordner sicher in den Schelf-Storage.
+    /// - Existiert die Quelle nicht → Fehler (kein silent nil).
+    /// - Existiert das Ziel schon → automatischer eindeutiger Name (keine Überschreibung).
+    /// - Wirft bei Zugriffs-/Volume-Fehlern, damit der Aufrufer entscheidet.
+    private func ingest(url: URL) throws -> URL {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        // Bereits im Storage → unverändert übernehmen.
         if url.path.hasPrefix(storageDir.path) { return url }
 
         let dest = storageDir.appendingPathComponent(url.lastPathComponent)
         let finalDest = fm.fileExists(atPath: dest.path) ? uniqueName(for: url, in: storageDir) : dest
-        do {
-            try fm.moveItem(at: url, to: finalDest)
-            return finalDest
-        } catch {
-            // Cross-Volume oder keine Rechte: kein Ingest möglich — Quelle bleibt unverändert,
-            // wir referenzieren nur (Fallback, damit Drag-in nie still fehlschlägt).
-            return url
+        try safeMove(from: url, to: finalDest)
+        return finalDest
+    }
+
+    // MARK: - Sichere Dateioperationen
+
+    /// Sicheres Verschieben: verweigert Überschreiben, prüft Quelle, wirft bei Fehler.
+    private func safeMove(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: source.path) else {
+            throw CocoaError(.fileNoSuchFile)
         }
+        guard !fm.fileExists(atPath: destination.path) else {
+            throw OperationError.destinationExists
+        }
+        try fm.moveItem(at: source, to: destination)
+    }
+
+    /// Sicheres Kopieren: verweigert Überschreiben, prüft Quelle, wirft bei Fehler.
+    private func safeCopy(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: source.path) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        guard !fm.fileExists(atPath: destination.path) else {
+            throw OperationError.destinationExists
+        }
+        try fm.copyItem(at: source, to: destination)
     }
 
     /// Datei-Picker (für den +-Button).
@@ -264,7 +347,19 @@ final class ShelfStore: ObservableObject {
 
         panel.begin { [weak self] resp in
             guard resp == .OK, let dest = panel.url else { return }
-            self?.performBatch(targets: targets, to: dest, copy: copy)
+            guard let self = self else { return }
+            // Vorab-Bestätigung: Quelle, Ziel, Anzahl + Modus anzeigen.
+            let verb = copy ? "kopieren" : "verschieben"
+            let msg = "\(targets.count) Objekt(e) nach \n\(dest.path)\n\(verb)?"
+            let alert = NSAlert()
+            alert.messageText = copy ? "Kopieren bestätigen" : "Verschieben bestätigen"
+            alert.informativeText = msg
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: copy ? "Kopieren" : "Verschieben")
+            alert.addButton(withTitle: "Abbrechen")
+            if alert.runModal() == .alertFirstButtonReturn {
+                self.performBatch(targets: targets, to: dest, copy: copy)
+            }
         }
     }
 
@@ -276,22 +371,17 @@ final class ShelfStore: ObservableObject {
         for item in targets {
             let dst = dest.appendingPathComponent(item.url.lastPathComponent)
             do {
-                if fm.fileExists(atPath: dst.path) {
-                    let unique = uniqueName(for: item.url, in: dest)
-                    if copy {
-                        try fm.copyItem(at: item.url, to: unique)
-                    } else {
-                        try fm.moveItem(at: item.url, to: unique)
-                    }
+                let finalDest = fm.fileExists(atPath: dst.path)
+                    ? uniqueName(for: item.url, in: dest)
+                    : dst
+                if copy {
+                    try safeCopy(from: item.url, to: finalDest)
                 } else {
-                    if copy {
-                        try fm.copyItem(at: item.url, to: dst)
-                    } else {
-                        try fm.moveItem(at: item.url, to: dst)
-                    }
+                    try safeMove(from: item.url, to: finalDest)
                 }
                 doneURLs.insert(item.url)
             } catch {
+                // Einzelne Datei fehlerhaft → nicht abbrechen, sondern sammeln.
                 errors.append("\(item.displayName): \(error.localizedDescription)")
             }
         }
@@ -302,6 +392,7 @@ final class ShelfStore: ObservableObject {
             items.removeAll { doneURLs.contains($0.url) }
             saveBookmarks()
         }
+        // Fehler einzeln behandeln: Nutzer erfährt, welche geklappt haben und welche nicht.
         lastError = errors.isEmpty ? nil : errors.joined(separator: "\n")
     }
 
