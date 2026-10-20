@@ -60,7 +60,12 @@ final class AppSettings: ObservableObject {
         static let sort          = "schelf.sort"
         static let persistShelf  = "schelf.persistShelf"
         static let bookmarks     = "schelf.shelfBookmarks"
+        static let shakeToOpen   = "schelf.shakeToOpen"
     }
+
+    /// Wird gesendet, wenn shakeToOpen geändert wird, damit der AppDelegate
+    /// den Monitor live startet/stoppt. userInfo: ["enabled": Bool]
+    static let shakeToOpenChanged = Notification.Name("schelf.shakeToOpenChanged")
 
     // MARK: Published
 
@@ -75,6 +80,16 @@ final class AppSettings: ObservableObject {
     @Published var panelFrame: NSRect?  { didSet { saveFrame() } }
     @Published var sort: ShelfSort      { didSet { defaults.set(sort.rawValue, forKey: Key.sort) } }
     @Published var persistShelf: Bool   { didSet { defaults.set(persistShelf, forKey: Key.persistShelf) } }
+    @Published var shakeToOpen: Bool {
+        didSet {
+            defaults.set(shakeToOpen, forKey: Key.shakeToOpen)
+            NotificationCenter.default.post(
+                name: Self.shakeToOpenChanged,
+                object: nil,
+                userInfo: ["enabled": shakeToOpen]
+            )
+        }
+    }
 
     let sortChanged = PassthroughSubject<Void, Never>()
 
@@ -101,6 +116,8 @@ final class AppSettings: ObservableObject {
         launchAtLogin = defaults.bool(forKey: Key.launchAtLogin)
         showAtLaunch  = defaults.object(forKey: Key.showAtLaunch) as? Bool ?? true
         persistShelf  = defaults.object(forKey: Key.persistShelf) as? Bool ?? true
+        // Shake-to-open ist standardmäßig AN (wie ursprünglich implementiert).
+        shakeToOpen   = defaults.object(forKey: Key.shakeToOpen) as? Bool ?? true
 
         if let s = defaults.string(forKey: Key.sort), let v = ShelfSort(rawValue: s) {
             sort = v

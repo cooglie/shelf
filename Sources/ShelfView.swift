@@ -315,6 +315,8 @@ struct ShelfView: View {
                 .font(.system(size: 11))
             Toggle("Bei Anmeldung starten", isOn: $settings.launchAtLogin)
                 .font(.system(size: 11))
+            Toggle("Maus schütteln öffnet Schelf", isOn: $settings.shakeToOpen)
+                .font(.system(size: 11))
 
             Divider()
 

@@ -110,12 +110,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Shake-to-open
 
     /// Schütteln der Maus öffnet das Panel (nur wenn es gerade versteckt ist).
+    /// Nur aktiv, wenn in den Einstellungen `shakeToOpen` eingeschaltet ist.
     private func setupShakeDetector() {
         shakeDetector.onShake = { [weak self] in
             guard let self = self, self.panel.isVisible == false else { return }
             self.panel.show()
         }
-        shakeDetector.start()
+        if settings.shakeToOpen {
+            shakeDetector.start()
+        }
+        // Live auf Änderungen reagieren: Monitor starten/stoppen.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(shakeToOpenChanged(_:)),
+            name: AppSettings.shakeToOpenChanged, object: nil)
+    }
+
+    @objc private func shakeToOpenChanged(_ note: Notification) {
+        let enabled = (note.userInfo?["enabled"] as? Bool) ?? false
+        if enabled {
+            shakeDetector.start()
+        } else {
+            shakeDetector.stop()
+        }
     }
 
     // MARK: - Globaler Hotkey (konfigurierbar)
