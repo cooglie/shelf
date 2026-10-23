@@ -2,8 +2,10 @@
 //  ShelfStore.swift
 //  Schelf
 //
-//  Hält die gesammelten Dateien (URLs). Liefert Thumbnails + Metadaten für die UI,
-//  führt Kopieren/Verschieben aus und beobachtet das Dateisystem.
+//  Hält die gesammelten Dateien (Zustand: Items, Sortierung, Suche, Auswahl).
+//  Dateisystemzugriffe werden an FileCoordinator delegiert (v2.2: Trennung
+//  Zustand vs. Dateisystem). Batch-Operationen laufen asynchron und liefern
+//  eine BatchResult-Zusammenfassung für die UI.
 //
 //  v2: Persistenz (Bookmarks), Sortierung, Refresh, Bulk-Aktionen für Auswahl,
 //      Öffnen / Öffnen mit …, Gesamtgröße, Drag-out-Support.
@@ -14,16 +16,6 @@ import Combine
 import Foundation
 
 final class ShelfStore: ObservableObject {
-
-    /// Physischer Storage-Ordner für abgelegte Dateien.
-    /// (~/Library/Application Support/Schelf/Shelf)
-    private let storageDir: URL = {
-        let fm = FileManager.default
-        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = support.appendingPathComponent("Schelf/Shelf", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
 
     /// Eine Ablage-Datei mit zwischengespeicherten Metadaten.
     struct Item: Identifiable, Equatable {
@@ -55,8 +47,16 @@ final class ShelfStore: ObservableObject {
     @Published var searchText: String = ""
     /// Zuletzt verschobene (Ingest-) Aktion; nil sobald Undo nicht mehr möglich.
     @Published private(set) var lastUndoableIngest: IngestUndo?
+    /// Zusammenfassung des letzten Batch-Laufs (für Post-Completion-UI). nil = keiner/verworben.
+    @Published private(set) var lastBatchResult: BatchResult?
+
+    /// Verwirft die letzte Batch-Zusammenfassung (UI „OK" im Summary-Alert).
+    func dismissBatchResult() { lastBatchResult = nil }
+    /// Läuft gerade ein Batch? (für UI-Spinner / Button-Disable).
+    @Published private(set) var isBatchRunning: Bool = false
 
     private let pasteboardReader = PasteboardReader()
+    private let fileCoordinator = FileCoordinator()
     private var addCounter = 0
     private var bag = Set<AnyCancellable>()
 
@@ -68,6 +68,9 @@ final class ShelfStore: ObservableObject {
     }
 
     let settings = AppSettings.shared
+
+    /// Storage-Ordner (exposed für UI/Persistenz-Prüfungen).
+    var storageDir: URL { fileCoordinator.storageDir }
 
     init() {
         // Sortierung live anwenden.
@@ -125,9 +128,8 @@ final class ShelfStore: ObservableObject {
     }
 
     /// Dateien in die Ablage aufnehmen — physisch in den Schelf-Storage verschieben
-    /// (Original wird aus der Quelle entfernt). Fehler werden nicht mehr silent
-    /// geschluckt, sondern in `lastError` gemeldet; die betreffende Datei wird
-    /// dann gar nicht aufgenommen (keine halbfertigen Referenzen).
+    /// (Original wird aus der Quelle entfernt). Fehler werden pro Datei gemeldet;
+    /// die betreffende Datei wird dann gar nicht aufgenommen (keine halbfertigen Referenzen).
     func add(urls: [URL], persist: Bool = true) {
         var existing = Set(items.map { $0.url })
         var undoMoves: [(URL, URL)] = []   // (stored, original)
@@ -135,7 +137,7 @@ final class ShelfStore: ObservableObject {
 
         for url in urls {
             // Bereits im Storage → nur referenzieren, nichts verschieben.
-            if url.path.hasPrefix(storageDir.path) {
+            if fileCoordinator.isInsideStorage(url) {
                 if !existing.contains(url) {
                     items.append(makeItem(for: url))
                     existing.insert(url)
@@ -143,7 +145,7 @@ final class ShelfStore: ObservableObject {
                 continue
             }
             do {
-                let stored = try ingest(url: url)
+                let stored = try fileCoordinator.ingest(url: url)
                 guard !existing.contains(stored) else { continue }
                 items.append(makeItem(for: stored))
                 existing.insert(stored)
@@ -167,17 +169,16 @@ final class ShelfStore: ObservableObject {
     /// Schelf-Storage zurück an ihren Ursprungsort und entfernt sie aus der Ablage.
     func undoLastAdd() {
         guard let undo = lastUndoableIngest, !undo.moves.isEmpty else { return }
-        let fm = FileManager.default
         var errors: [String] = []
         var undoneURLs: Set<URL> = []
 
         for move in undo.moves {
             do {
                 // Ursprung ggf. uniquifizieren, falls inzwischen belegt.
-                let original = fm.fileExists(atPath: move.original.path)
-                    ? uniqueName(for: move.original, in: move.original.deletingLastPathComponent())
+                let original = FileManager.default.fileExists(atPath: move.original.path)
+                    ? fileCoordinator.uniqueName(for: move.original, in: move.original.deletingLastPathComponent())
                     : move.original
-                try fm.moveItem(at: move.stored, to: original)
+                try fileCoordinator.safeMove(from: move.stored, to: original)
                 undoneURLs.insert(move.stored)
             } catch {
                 errors.append("\(move.stored.lastPathComponent): \(error.localizedDescription)")
@@ -190,51 +191,8 @@ final class ShelfStore: ObservableObject {
         if !errors.isEmpty { lastError = errors.joined(separator: "\n") }
     }
 
-    /// Verschiebt eine Datei/Ordner sicher in den Schelf-Storage.
-    /// - Existiert die Quelle nicht → Fehler (kein silent nil).
-    /// - Existiert das Ziel schon → automatischer eindeutiger Name (keine Überschreibung).
-    /// - Wirft bei Zugriffs-/Volume-Fehlern, damit der Aufrufer entscheidet.
-    private func ingest(url: URL) throws -> URL {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: url.path) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-        // Bereits im Storage → unverändert übernehmen.
-        if url.path.hasPrefix(storageDir.path) { return url }
+    // MARK: - Datei-Picker (für den +-Button).
 
-        let dest = storageDir.appendingPathComponent(url.lastPathComponent)
-        let finalDest = fm.fileExists(atPath: dest.path) ? uniqueName(for: url, in: storageDir) : dest
-        try safeMove(from: url, to: finalDest)
-        return finalDest
-    }
-
-    // MARK: - Sichere Dateioperationen
-
-    /// Sicheres Verschieben: verweigert Überschreiben, prüft Quelle, wirft bei Fehler.
-    private func safeMove(from source: URL, to destination: URL) throws {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: source.path) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-        guard !fm.fileExists(atPath: destination.path) else {
-            throw OperationError.destinationExists
-        }
-        try fm.moveItem(at: source, to: destination)
-    }
-
-    /// Sicheres Kopieren: verweigert Überschreiben, prüft Quelle, wirft bei Fehler.
-    private func safeCopy(from source: URL, to destination: URL) throws {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: source.path) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-        guard !fm.fileExists(atPath: destination.path) else {
-            throw OperationError.destinationExists
-        }
-        try fm.copyItem(at: source, to: destination)
-    }
-
-    /// Datei-Picker (für den +-Button).
     func addViaPicker() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -248,40 +206,48 @@ final class ShelfStore: ObservableObject {
         }
     }
 
+    // MARK: - Item-Erzeugung (Metadaten + Thumbnail)
+
+    /// Baut ein Item synchron (Placeholder; Thumbnail/Size werden asynchron nachgeladen
+    /// via refreshItemMetadata). Wird auch beim initialen Laden verwendet.
     private func makeItem(for url: URL) -> Item {
         var isDir: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-        let size: Int64
-        var mod = Date()
-        if exists {
-            // Verzeichnisse: rekursive Summe über alle Inhalte (sonst 0).
-            size = isDir.boolValue ? recursiveSize(of: url)
-                                   : ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0)
-            if let d = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date { mod = d }
-        } else {
-            size = 0
-        }
-        let icon = NSWorkspace.shared.icon(forFile: url.path)
-        let thumb = ThumbnailProvider.thumbnail(for: url, maxPixel: 160)
+        let icon = exists ? NSWorkspace.shared.icon(forFile: url.path) : nil
         addCounter += 1
-        return Item(url: url, isDirectory: isDir.boolValue, sizeBytes: size,
-                    modDate: mod, icon: icon, thumbnail: thumb, addedOrder: addCounter)
+        return Item(url: url, isDirectory: isDir.boolValue, sizeBytes: 0,
+                    modDate: Date(), icon: icon, thumbnail: nil, addedOrder: addCounter)
     }
 
-    /// Rekursive Größe eines Verzeichnisses (Bytes über alle regulären Dateien).
-    private func recursiveSize(of url: URL) -> Int64 {
-        let fm = FileManager.default
-        var total: Int64 = 0
-        guard let enumerator = fm.enumerator(at: url,
-                                             includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
-                                             options: [.skipsHiddenFiles]) else { return 0 }
-        for case let fileURL as URL in enumerator {
-            if let v = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
-               v.isRegularFile == true, let s = v.fileSize {
-                total += Int64(s)
+    /// Liest Größe + Modifikationsdatum (off-main) und aktualisiert das Item.
+    func refreshItemMetadata(_ item: Item) {
+        let url = item.url
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var size: Int64 = 0
+            var mod = Date()
+            var isDir = false
+            var isDirB: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirB) {
+                isDir = isDirB.boolValue
+                if isDir {
+                    size = self?.fileCoordinator.recursiveSize(of: url) ?? 0
+                } else {
+                    size = ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0)
+                }
+                if let d = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date { mod = d }
+            }
+            let thumb = ThumbnailProvider.thumbnail(for: url, maxPixel: 160)
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if let idx = self.items.firstIndex(where: { $0.id == item.id }) {
+                    self.items[idx].sizeBytes = size
+                    self.items[idx].modDate = mod
+                    self.items[idx].isDirectory = isDir
+                    self.items[idx].thumbnail = thumb
+                    self.objectWillChange.send()
+                }
             }
         }
-        return total
     }
 
     // MARK: - Entfernen
@@ -292,7 +258,7 @@ final class ShelfStore: ObservableObject {
     }
 
     func remove(_ item: Item) {
-        trash(url: item.url)
+        fileCoordinator.trash(url: item.url)
         items.removeAll { $0.id == item.id }
         saveBookmarks()
     }
@@ -300,36 +266,32 @@ final class ShelfStore: ObservableObject {
     /// Entfernt die übergebenen Items (Bulk).
     func remove(items toRemove: [Item]) {
         let ids = Set(toRemove.map { $0.id })
-        for it in toRemove { trash(url: it.url) }
+        for it in toRemove { fileCoordinator.trash(url: it.url) }
         items.removeAll { ids.contains($0.id) }
         saveBookmarks()
     }
 
     func clear() {
-        for it in items { trash(url: it.url) }
+        for it in items { fileCoordinator.trash(url: it.url) }
         items.removeAll()
         settings.clearBookmarks()
     }
 
-    /// Datei aus dem Schelf-Storage in den Papierkorb verschieben.
-    /// Externe (nur referenzierte) Dateien werden nicht gelöscht.
-    private func trash(url: URL) {
-        guard url.path.hasPrefix(storageDir.path) else { return }
-        var resultURL: NSURL?
-        try? FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
-    }
-
     // MARK: - Refresh
 
-    /// Metadaten & Thumbnails neu einlesen.
+    /// Metadaten & Thumbnails neu einlesen (asynchron, off-main).
     func refresh() {
         let urls = items.map { $0.url }
+        // Placeholder neu aufbauen, dann Metadaten asynchron nachladen.
         items = urls.map { makeItem(for: $0) }
         applySort()
         saveBookmarks()
+        for item in items {
+            refreshItemMetadata(item)
+        }
     }
 
-    // MARK: - Verschieben / Kopieren
+    // MARK: - Verschieben / Kopieren (asynchron, mit Zusammenfassung)
 
     /// Alle oder nur die Auswahl (wenn nicht leer) kopieren/verschieben.
     func moveAll(selected: [Item]? = nil) { runBatch(copy: false, selected: selected) }
@@ -364,49 +326,32 @@ final class ShelfStore: ObservableObject {
         }
     }
 
+    /// Batch asynchron ausführen (UI nicht blockieren), dann Zusammenfassung setzen.
     private func performBatch(targets: [Item], to dest: URL, copy: Bool) {
-        let fm = FileManager.default
-        var errors: [String] = []
-        var doneURLs: Set<URL> = []
+        isBatchRunning = true
+        let sources = targets.map { $0.url }
+        let coordinator = fileCoordinator
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = coordinator.performBatch(sources: sources, to: dest, copy: copy)
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isBatchRunning = false
+                self.lastBatchResult = result
 
-        for item in targets {
-            let dst = dest.appendingPathComponent(item.url.lastPathComponent)
-            do {
-                let finalDest = fm.fileExists(atPath: dst.path)
-                    ? uniqueName(for: item.url, in: dest)
-                    : dst
-                if copy {
-                    try safeCopy(from: item.url, to: finalDest)
-                } else {
-                    try safeMove(from: item.url, to: finalDest)
+                if !copy {
+                    // Erfolgreich verschobene Dateien aus dem Storage entfernen.
+                    let movedURLs = Set(result.succeeded.map { $0.source })
+                    for u in movedURLs { self.fileCoordinator.trash(url: u) }
+                    self.items.removeAll { movedURLs.contains($0.url) }
+                    self.saveBookmarks()
                 }
-                doneURLs.insert(item.url)
-            } catch {
-                // Einzelne Datei fehlerhaft → nicht abbrechen, sondern sammeln.
-                errors.append("\(item.displayName): \(error.localizedDescription)")
+                // Fehler zusätzlich ins lastError (für das bestehende Fehler-Alert).
+                if result.failureCount > 0 {
+                    self.lastError = result.failed.map {
+                        "\($0.source.lastPathComponent): \($0.error?.errorDescription ?? "")"
+                    }.joined(separator: "\n")
+                }
             }
-        }
-
-        if !copy {
-            // Verschobene Dateien aus dem Schelf-Storage entfernen (falls sie dort lagen).
-            for u in doneURLs { trash(url: u) }
-            items.removeAll { doneURLs.contains($0.url) }
-            saveBookmarks()
-        }
-        // Fehler einzeln behandeln: Nutzer erfährt, welche geklappt haben und welche nicht.
-        lastError = errors.isEmpty ? nil : errors.joined(separator: "\n")
-    }
-
-    private func uniqueName(for src: URL, in dir: URL) -> URL {
-        let name = src.deletingPathExtension().lastPathComponent
-        let ext = src.pathExtension
-        var i = 2
-        while true {
-            let candidate = ext.isEmpty
-                ? dir.appendingPathComponent("\(name) \(i)")
-                : dir.appendingPathComponent("\(name) \(i).\(ext)")
-            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
-            i += 1
         }
     }
 

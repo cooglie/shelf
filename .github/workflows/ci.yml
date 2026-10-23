@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    name: Build & Test (arm64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer || true
+
+      - name: Build
+        run: bash build.sh
+
+      - name: Verify bundle
+        run: |
+          APP="$HOME/Desktop/Schelf.app"
+          test -f "$APP/Contents/MacOS/Schelf" || { echo "Missing executable"; exit 1; }
+          test -f "$APP/Contents/Info.plist"   || { echo "Missing Info.plist"; exit 1; }
+          archs=$(lipo -archs "$APP/Contents/MacOS/Schelf")
+          echo "Architectures: $archs"
+          echo "$archs" | grep -q arm64    || { echo "arm64 missing"; exit 1; }
+          echo "$archs" | grep -q x86_64   || { echo "x86_64 missing"; exit 1; }
+
+      - name: Tests
+        run: bash run_tests.sh
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Schelf.app
+          path: ~/Desktop/Schelf.app

@@ -104,6 +104,12 @@ enum L10nKey: String {
     case errorMoveCopyTitle = "errorMoveCopyTitle"
     case errorDestExists = "errorDestExists"
 
+    // Batch-Zusammenfassung
+    case batchSummaryTitle = "batchSummaryTitle"
+    case batchAllOk = "batchAllOk"
+    case batchPartial = "batchPartial"
+    case batchRunning = "batchRunning"
+
     // Statusleisten-Menü
     case menuToggle = "menuToggle"
     case menuAddFile = "menuAddFile"
@@ -186,6 +192,11 @@ private let tableEN: [L10nKey: String] = [
     .errorMoveCopyTitle: "Error moving/copying",
     .errorDestExists: "A file with this name already exists at the destination.",
 
+    .batchSummaryTitle: "Batch complete",
+    .batchAllOk: "%d file(s) copied successfully.",
+    .batchPartial: "%d succeeded, %d failed.",
+    .batchRunning: "Working…",
+
     .menuToggle: "Toggle Schelf (%@)",
     .menuAddFile: "Add file…",
     .menuRefresh: "Refresh shelf",
@@ -264,6 +275,11 @@ private let tableDE: [L10nKey: String] = [
     .errorMoveCopyTitle: "Fehler beim Verschieben/Kopieren",
     .errorDestExists: "Eine Datei mit diesem Namen existiert im Ziel bereits.",
 
+    .batchSummaryTitle: "Stapel abgeschlossen",
+    .batchAllOk: "%d Datei(en) erfolgreich kopiert.",
+    .batchPartial: "%d erfolgreich, %d fehlgeschlagen.",
+    .batchRunning: "Arbeite…",
+
     .menuToggle: "Schelf ein-/ausblenden (%@)",
     .menuAddFile: "Datei hinzufügen …",
     .menuRefresh: "Ablage aktualisieren",
@@ -341,6 +357,11 @@ private let tableFR: [L10nKey: String] = [
 
     .errorMoveCopyTitle: "Erreur lors du déplacement/copie",
     .errorDestExists: "Un fichier avec ce nom existe déjà à la destination.",
+
+    .batchSummaryTitle: "Lot terminé",
+    .batchAllOk: "%d fichier(s) copié(s) avec succès.",
+    .batchPartial: "%d réussi(s), %d échoué(s).",
+    .batchRunning: "En cours…",
 
     .menuToggle: "Afficher/Masquer Schelf (%@)",
     .menuAddFile: "Ajouter un fichier…",

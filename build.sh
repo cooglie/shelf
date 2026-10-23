@@ -71,7 +71,11 @@ build_icon() {
     fi
     if [[ ! -f "$SRC_IMG" ]]; then
         echo "🎨 Erzeuge Icon-Quelle via CoreGraphics (make_icon.swift) …"
-        swift "$ROOT/make_icon.swift" "$SRC_IMG" || { echo "⚠️  Icon-Erzeugung fehlgeschlagen — überspringe."; return; }
+        swift "$ROOT/make_icon.swift" "$SRC_IMG" || {
+            echo "⚠️  WARNUNG: Icon-Erzeugung fehlgeschlagen — Bundle wird OHNE Icon gebaut." >&2
+            echo "⚠️  Release mit fehlendem Icon sollte nicht veröffentlicht werden." >&2
+            return
+        }
     fi
     echo "🎨 Erzeuge .icns aus $SRC_IMG …"
     rm -rf "$ICONSET"; mkdir -p "$ICONSET"
@@ -127,11 +131,6 @@ cp "$ROOT/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 if [[ -f "$ROOT/Resources/AppIcon.icns" ]]; then
     cp "$ROOT/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 fi
-
-# Ad-hoc signieren. KEIN xattr -d com.apple.quarantine:
-# Die Quarantäne-Markierung ist ein Gatekeeper-Sicherheitsmerkmal für
-# heruntergeladene Apps und bleibt unangetastet. Lokale Builds tragen sie ohnehin nicht.
-codesign --force --deep --sign - "$APP_BUNDLE"
 
 # --- Auf den Desktop legen (erst nach erfolgreichem Build ersetzen) ---
 DESKTOP="$(cd "$HOME/Desktop" && pwd -P)"

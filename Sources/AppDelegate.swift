@@ -53,6 +53,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         unregisterHotkey()
         shakeDetector.stop()
         panel.saveFrameToSettings()
+        // Security-Scoped-Bookmarks freigeben (paarig zu startAccessing…).
+        // Verhindert einen Leak der Zugriffs-Tokens über App-Neustarts.
+        settings.stopAllSecurityScopes()
     }
 
     // MARK: - Statusleisten-Item

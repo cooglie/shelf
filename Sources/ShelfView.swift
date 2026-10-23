@@ -61,6 +61,16 @@ struct ShelfView: View {
         } message: {
             Text(store.lastError ?? "")
         }
+        // Post-Completion-Zusammenfassung nach jedem Batch (Erfolge + Fehler).
+        .alert(L10n.string(.batchSummaryTitle),
+               isPresented: Binding(get: { store.lastBatchResult != nil },
+                                    set: { if !$0 { store.dismissBatchResult() } })) {
+            Button(L10n.string(.ok)) { store.dismissBatchResult() }
+        } message: {
+            if let r = store.lastBatchResult {
+                Text(batchSummaryMessage(for: r))
+            }
+        }
     }
 
     // MARK: - Header
@@ -92,14 +102,14 @@ struct ShelfView: View {
                     .labelStyle(.iconOnly)
             }
             .help(bulkHelp(L10n.string(.copySelectedHelp), L10n.string(.copyAllHelp)))
-            .disabled(store.items.isEmpty)
+            .disabled(store.items.isEmpty || store.isBatchRunning)
 
             Button { store.moveAll(selected: selectedItems) } label: {
                 Label(L10n.string(.move), systemImage: "arrow.right.doc")
                     .labelStyle(.iconOnly)
             }
             .help(bulkHelp(L10n.string(.moveSelectedHelp), L10n.string(.moveAllHelp)))
-            .disabled(store.items.isEmpty)
+            .disabled(store.items.isEmpty || store.isBatchRunning)
 
             Button {
                 if selection.isEmpty {
@@ -294,6 +304,20 @@ struct ShelfView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+
+    // MARK: - Batch-Zusammenfassung
+
+    /// Lokalisierte Zusammenfassung für das Post-Completion-Alert.
+    private func batchSummaryMessage(for r: BatchResult) -> String {
+        if r.failureCount == 0 {
+            return String(format: L10n.string(.batchAllOk), r.successCount)
+        }
+        let header = String(format: L10n.string(.batchPartial), r.successCount, r.failureCount)
+        let details = r.failed.map {
+            "• \($0.source.lastPathComponent): \($0.error?.errorDescription ?? "")"
+        }.joined(separator: "\n")
+        return header + "\n" + details
     }
 
     // MARK: - Settings-Popover

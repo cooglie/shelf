@@ -52,6 +52,9 @@ a global shortcut (⌘⇧D).
 - **macOS 12 (Monterey) or newer** — SwiftUI needs Big Sur; the native modifiers
   used here (`.foregroundStyle`, `.alert(message:)`) need Monterey. Runs on both
   Apple Silicon (arm64) and Intel Macs (x86_64).
+  > The original target was 10.15+; a native SwiftUI app isn't feasible there.
+  > For 10.15 the UI would have to be rewritten entirely in AppKit.
+
 ## Build
 
 ```bash
@@ -60,9 +63,23 @@ bash build.sh
 ```
 
 The script:
-1. Generates the app icon (CoreGraphics via `make_icon.swift` → `.icns`).
+1. Generates the app icon if not already cached (CoreGraphics via
+   `make_icon.swift` → `.icns`).
 2. Compiles a universal binary (arm64 + x86_64) with `swiftc`.
-3. Builds the `.app` bundle, and copies it to the Desktop.
+3. Builds the `.app` bundle and copies it to the Desktop.
+
+The app is **unsigned** (no ad-hoc signature). On first launch macOS will
+block it — choose *System Settings → Privacy & Security → Open Anyway*.
+
+### Run the tests
+
+```bash
+bash run_tests.sh
+```
+
+Builds and runs the `FileCoordinator` test suite (no Xcode project required).
+Tests cover: unique-name resolution, dedupe, batch copy/move with
+error isolation, symlink handling, recursive size, and trash semantics.
 
 No Xcode project needed — just the Command Line Tools.
 
@@ -83,113 +100,63 @@ open ~/Desktop/Schelf.app
 | Clear shelf | 🗑 button (files are not deleted) |
 | Quit | Status-bar menu → “Quit Schelf” |
 
+## Project Structure
+
+```
+Schelf/
+├── Sources/
+│   ├── main.swift                  # @main entry, NSApplication
+│   ├── AppDelegate.swift           # Status item, hotkey (⌘⇧D), lifecycle
+│   ├── ShelfPanel.swift            # Floating NSPanel (always-on-top, all Spaces)
+│   ├── ShelfView.swift             # SwiftUI: drop zone, grid, toolbar, QuickLook trigger
+│   ├── ShelfStore.swift            # Collect, dedupe, metadata, UI-facing state (delegates FS to FileCoordinator)
+│   ├── FileCoordinator.swift       # Pure filesystem layer: ingest, safeMove/Copy, uniqueName, batch, trash, size
+│   ├── PasteboardReader.swift      # File URLs from NSPasteboard
+│   ├── ThumbnailProvider.swift     # Image thumbnails + QLThumbnailing
+│   ├── QuickLookWindowController.swift  # QLPreviewView window
+│   └── Localization.swift          # EN/DE/FR language tables + L10n helper
+├── Resources/
+│   └── Info.plist                  # LSUIElement (menu bar), icon, min. macOS 12
+├── make_icon.swift                 # Draws the app icon (CoreGraphics)
+├── build.sh                        # Universal build + Desktop deployment
+├── run_tests.sh                    # Builds + runs FileCoordinator tests
+├── Tests/SchelfTests/              # Test suite (no Xcode project needed)
+└── .github/workflows/ci.yml        # CI: build + test on every push/PR
+```
+
+## Security Model
+
+Schelf stores *references* to collected files, not their contents. The actual
+files are moved into a private storage folder
+(`~/Library/Application Support/Schelf/Shelf`).
+
+**Access scope & lifetime:**
+- File-system access uses **URL bookmarks with security scope** when the source
+  is outside the app's sandbox. A scope is `start`ed when a bookmark is resolved
+  and `stop`ed when the app terminates or the bookmark is cleared — paired
+  calls, no leaked access tokens.
+- Invalid or unreachable bookmarks are **skipped**, never crash the app. Stale
+  bookmarks are refreshed on load and re-persisted.
+- Removing a file from the shelf trashes the storage copy (it is not deleted
+  permanently); external originals are never modified by removal.
+
+**Logging:** Schelf does not log file paths or metadata to disk.
+
+**Performance:** thumbnails and file sizes are computed on a background queue
+so large files never block the UI. Batch copy/move also runs off the main
+thread; the UI shows a post-completion summary (successes + per-file failures).
+
+**Error handling:** every file operation is treated as fallible. Batch
+operations do not abort on the first error — each file gets its own outcome
+(success or a classified error: missing source, permission denied, disk full,
+…). The summary shows the *actual* state, not the planned one.
 
 ## Notes
 
-- on first launch you may need to choose “Open Anyway” under
-  *System Settings → Privacy & Security*.
+- Unsigned build — on first launch choose “Open Anyway” under *System Settings
+  → Privacy & Security*.
 - The global hotkey needs no special permission (Carbon API).
-- v1 is intentionally lean: no shelf persistence across restarts, no iCloud
-  sync, no drag-out from the shelf back into Finder. A solid foundation for
-  follow-up versions.
 
 ## License
 
-Local, private.
-
-
-
-# Schelf — Schwebende Ablage für macOS
-
-Eine schwebende, immer im Vordergrund liegende Ablage: Dateien reinziehen, sammeln,
-als Stapel kopieren oder verschieben, Vorschauen anzeigen — alles aus einem eleganten,
-nativem SwiftUI-Panel, das per globalem Shortcut (⌘⇧D) ein- und ausgeblendet wird.
-
-## Funktionen (v2)
-
-### Neu in v2 (15 Features)
-
-1. **Ablage-Persistenz** — Inhalte bleiben über Neustarts erhalten (URL-Bookmarks).
-2. **Multi-Select** — mehrere Dateien per Klick auswählen, Bulk-Aktionen wirken nur auf die Auswahl.
-3. **Suche/Filter** — nach Name live filtern.
-4. **Sortierung** — Name, Größe, Datum, Hinzugefügt (↕).
-5. **Drag-out** — Dateien aus der Ablage zurück in Finder/andere Apps ziehen.
-6. **Opazitäts-Regler** — Hintergrund-Transparenz einstellen (30–100 %).
-7. **Gesamtgröße** — Summe der Ablage im Footer.
-8. **QuickLook-Navigation** — ← / → blättert durch alle Vorschauen.
-9. **Öffnen** — Datei in Standard-App öffnen (Kontextmenü).
-10. **Öffnen mit …** — App-Wähler über Datei-Picker.
-11. **Frame-Persistenz** — Position & Größe des Panels werden gespeichert.
-12. **Einstellungen** — Fenster mit Opazität, Persistenz, Login-Start, Hotkey-Info.
-13. **+ Button** — Dateien über NSOpenPanel hinzufügen.
-14. **Refresh** — Metadaten & Thumbnails neu einlesen.
-15. **Tastatur** — ⌫ entfernt Auswahl, ⎋ hebt Auswahl auf.
-
-### Funktionen (v1, weiterhin enthalten)
-
-- **Dateien auf eine schwebende Ablage ziehen** — Drag & Drop aus dem Finder oder
-  beliebigen Apps; mehrere Dateien gleichzeitig; Duplikate werden erkannt.
-- **Gesammelt verschieben oder kopieren** — ein Klick verschiebt/kopiert den gesamten
-  Ablage-Inhalt in einen gewählten Ordner (`NSOpenPanel`). Namenskonflikte werden
-  automatisch eindeutig aufgelöst (`Name 2.ext` …). Verschobene Dateien werden aus
-  der Ablage entfernt, kopierte bleiben.
-- **Vorschauen für Bilder und Dokumente** — Bilder werden direkt dekodiert
-  (Thumbnail via `CGImageSource`), andere Dateien via `QuickLookThumbnailing`.
-  Doppelklick öffnet die vollständige QuickLook-Vorschau (`QLPreviewView`).
-- **Ablage per globalem Shortcut öffnen** — **⌘⇧D** blendet das Panel ein/aus,
-  systemweit registriert via Carbon `RegisterEventHotKey`.
-- **Elegantes, natives SwiftUI-Design** — schwebendes `NSPanel` mit transparenter
-  Titlebar, always-on-top über allen Spaces, draggable, Thumbnail-Grid mit
-  Kontextmenüs (Vorschau · Im Finder zeigen · Entfernen), Statusleisten-Icon.
-
-## Systemanforderungen
-
-- **macOS 12 (Monterey) oder neuer** — SwiftUI benötigt Big Sur, die hier genutzten
-  nativen Modifikatoren (`.foregroundStyle`, `.alert(message:)`) Monterey. Damit
-  laufen sowohl Apple Silicon (arm64) als auch Intel-Macs (x86_64).
-
-## Bauen
-
-```bash
-cd Schelf
-bash build.sh
-```
-
-Das Skript:
-1. Erzeugt das App-Icon (CoreGraphics via `make_icon.swift` → `.icns`).
-2. Kompiliert ein Universal-Binary (arm64 + x86_64) mit `swiftc`.
-3. Baut das `.app`-Bundle, und kopiert es auf den Desktop.
-
-Kein Xcode-Projekt nötig — nur die Command Line Tools.
-
-```bash
-open ~/Desktop/Schelf.app
-```
-
-## Bedienung
-
-| Aktion | Wie |
-|---|---|
-| Ablage ein-/ausblenden | **⌘⇧D** (global) oder Statusleisten-Menü |
-| Datei hinzufügen | Auf das Panel ziehen |
-| Vorschau öffnen | Doppelklick auf Thumbnail |
-| Im Finder zeigen | Rechtsklick → „Im Finder zeigen" |
-| Alle kopieren | 📄-Button oben rechts → Ordner wählen |
-| Alle verschieben | →-Button oben rechts → Ordner wählen |
-| Ablage leeren | 🗑-Button (Dateien werden nicht gelöscht) |
-| Beenden | Statusleisten-Menü → „Schelf beenden" |
-
-
-
-## Hinweise
-
-- beim ersten Start ggf. über *Systemeinstellungen → Datenschutz →
-  Sicherheit* „Trotzdem öffnen" wählen.
-- Der globale Hotkey benötigt keine Sonderberechtigung (Carbon-API).
-- v1 ist bewusst schlank: keine Persistenz der Ablage über Neustarts, keine
-  iCloud-Sync, kein Drag-out aus der Ablage zurück in den Finder. Solides Fundament
-  für Folgeversionen.
-
-## Lizenz
-
-Lokal, privat.
+MIT License. See [`LICENSE`](LICENSE).
