@@ -31,16 +31,20 @@ struct HotkeyConfig: Codable, Equatable {
 enum ShelfSort: String, Codable, CaseIterable, Identifiable {
     case addedDesc, addedAsc, nameAsc, nameDesc, sizeDesc, sizeAsc, dateDesc, dateAsc
     var id: String { rawValue }
-    var label: String {
+    /// Lokalisierter Anzeige-Name (in der aktuell gewählten Sprache).
+    var label: String { localizedName(for: L10n.shared.language) }
+
+    /// Lokalisierter Name für eine bestimmte Sprache.
+    func localizedName(for lang: Language) -> String {
         switch self {
-        case .addedDesc: return "Zuletzt hinzugefügt"
-        case .addedAsc:  return "Zuerst hinzugefügt"
-        case .nameAsc:   return "Name ↑"
-        case .nameDesc:  return "Name ↓"
-        case .sizeDesc:  return "Größe ↓"
-        case .sizeAsc:   return "Größe ↑"
-        case .dateDesc:  return "Änderungsdatum ↓"
-        case .dateAsc:   return "Änderungsdatum ↑"
+        case .addedDesc: return L10n.string(.sortAddedDesc)
+        case .addedAsc:  return L10n.string(.sortAddedAsc)
+        case .nameAsc:   return L10n.string(.sortNameAsc)
+        case .nameDesc:  return L10n.string(.sortNameDesc)
+        case .sizeDesc:  return L10n.string(.sortSizeDesc)
+        case .sizeAsc:   return L10n.string(.sortSizeAsc)
+        case .dateDesc:  return L10n.string(.sortDateDesc)
+        case .dateAsc:   return L10n.string(.sortDateAsc)
         }
     }
 }
@@ -61,6 +65,7 @@ final class AppSettings: ObservableObject {
         static let persistShelf  = "schelf.persistShelf"
         static let bookmarks     = "schelf.shelfBookmarks"
         static let shakeToOpen   = "schelf.shakeToOpen"
+        static let language       = "schelf.language"
     }
 
     /// Wird gesendet, wenn shakeToOpen geändert wird, damit der AppDelegate
@@ -88,6 +93,14 @@ final class AppSettings: ObservableObject {
                 object: nil,
                 userInfo: ["enabled": shakeToOpen]
             )
+        }
+    }
+    /// Gewählte UI-Sprache. Default: Englisch.
+    @Published var language: Language {
+        didSet {
+            defaults.set(language.rawValue, forKey: Key.language)
+            // Sort-Labels neu ausgeben, damit Picker sofort aktualisiert.
+            sortChanged.send()
         }
     }
 
@@ -118,6 +131,12 @@ final class AppSettings: ObservableObject {
         persistShelf  = defaults.object(forKey: Key.persistShelf) as? Bool ?? true
         // Shake-to-open ist standardmäßig AN (wie ursprünglich implementiert).
         shakeToOpen   = defaults.object(forKey: Key.shakeToOpen) as? Bool ?? true
+        // Sprache: Englisch ist Default.
+        if let s = defaults.string(forKey: Key.language), let v = Language(rawValue: s) {
+            language = v
+        } else {
+            language = .english
+        }
 
         if let s = defaults.string(forKey: Key.sort), let v = ShelfSort(rawValue: s) {
             sort = v

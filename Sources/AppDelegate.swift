@@ -67,19 +67,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image?.isTemplate = true
         }
 
+        statusItem.menu = makeMenu()
+    }
+
+    /// Baut das Statusleisten-Menü (lokalisiert) neu auf.
+    /// Wird auch beim Sprachwechsel aufgerufen.
+    private func makeMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(withTitle: "Schelf ein-/ausblenden (\(settings.hotkey.label))",
+        menu.addItem(withTitle: L10n.string(.menuToggle, settings.hotkey.label),
                      action: #selector(togglePanel), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Datei hinzufügen …", action: #selector(addFiles), keyEquivalent: "")
-        menu.addItem(withTitle: "Ablage aktualisieren", action: #selector(refresh), keyEquivalent: "")
-        menu.addItem(withTitle: "Ablage leeren", action: #selector(clearShelf), keyEquivalent: "")
+        menu.addItem(withTitle: L10n.string(.menuAddFile), action: #selector(addFiles), keyEquivalent: "")
+        menu.addItem(withTitle: L10n.string(.menuRefresh), action: #selector(refresh), keyEquivalent: "")
+        menu.addItem(withTitle: L10n.string(.menuClear), action: #selector(clearShelf), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Über Schelf", action: #selector(showAbout), keyEquivalent: "")
+        menu.addItem(withTitle: L10n.string(.menuAbout), action: #selector(showAbout), keyEquivalent: "")
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Schelf beenden", action: #selector(quitApp), keyEquivalent: "q")
+        menu.addItem(withTitle: L10n.string(.menuQuit), action: #selector(quitApp), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }
-        statusItem.menu = menu
+        return menu
     }
 
     @objc private func addFiles() { store.addViaPicker() }
@@ -88,9 +94,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showAbout() {
         NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: "Schelf",
-            .applicationVersion: "2.0",
-            .credits: "Schwebende Ablage für macOS."
+            .applicationName: L10n.string(.appName),
+            .applicationVersion: "2.1",
+            .credits: L10n.string(.aboutCredits)
         ])
     }
 
@@ -123,6 +129,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(shakeToOpenChanged(_:)),
             name: AppSettings.shakeToOpenChanged, object: nil)
+
+        // Bei Sprachwechsel: Menü und About-Texte neu aufbauen.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(languageChanged),
+            name: L10n.languageChanged, object: nil)
+    }
+
+    @objc private func languageChanged() {
+        // Statusleisten-Menü lokalisiert neu aufbauen.
+        statusItem.menu = makeMenu()
     }
 
     @objc private func shakeToOpenChanged(_ note: Notification) {

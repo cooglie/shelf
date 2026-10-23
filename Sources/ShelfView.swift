@@ -31,6 +31,7 @@ struct ShelfView: View {
 
     @ObservedObject var store: ShelfStore
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var l10n = L10n.shared
     @Environment(\.openQuickLook) var openQuickLook
 
     @State private var dropHover = false
@@ -53,10 +54,10 @@ struct ShelfView: View {
         .opacity(settings.panelOpacity)
         .onAppear { installKeyMonitor() }
         .onDisappear { removeKeyMonitor() }
-        .alert("Fehler beim Verschieben/Kopieren",
+        .alert(L10n.string(.errorMoveCopyTitle),
                isPresented: Binding(get: { store.lastError != nil },
                                     set: { if !$0 { store.lastError = nil } })) {
-            Button("OK") { store.lastError = nil }
+            Button(L10n.string(.ok)) { store.lastError = nil }
         } message: {
             Text(store.lastError ?? "")
         }
@@ -74,30 +75,30 @@ struct ShelfView: View {
             Spacer()
 
             Button { store.addViaPicker() } label: {
-                Label("Hinzufügen", systemImage: "plus")
+                Label(L10n.string(.addFiles), systemImage: "plus")
                     .labelStyle(.iconOnly)
             }
-            .help("Dateien über Picker hinzufügen")
+            .help(L10n.string(.addFilesHelp))
             Button { store.refresh() } label: {
-                Label("Aktualisieren", systemImage: "arrow.clockwise")
+                Label(L10n.string(.refresh), systemImage: "arrow.clockwise")
                     .labelStyle(.iconOnly)
             }
-            .help("Metadaten neu einlesen")
+            .help(L10n.string(.refreshHelp))
 
             Divider().frame(height: 14)
 
             Button { store.copyAll(selected: selectedItems) } label: {
-                Label("Kopieren", systemImage: "doc.on.doc")
+                Label(L10n.string(.copy), systemImage: "doc.on.doc")
                     .labelStyle(.iconOnly)
             }
-            .help(bulkHelp("Auswahl kopieren", "Alle kopieren"))
+            .help(bulkHelp(L10n.string(.copySelectedHelp), L10n.string(.copyAllHelp)))
             .disabled(store.items.isEmpty)
 
             Button { store.moveAll(selected: selectedItems) } label: {
-                Label("Verschieben", systemImage: "arrow.right.doc")
+                Label(L10n.string(.move), systemImage: "arrow.right.doc")
                     .labelStyle(.iconOnly)
             }
-            .help(bulkHelp("Auswahl verschieben", "Alle verschieben"))
+            .help(bulkHelp(L10n.string(.moveSelectedHelp), L10n.string(.moveAllHelp)))
             .disabled(store.items.isEmpty)
 
             Button {
@@ -108,17 +109,17 @@ struct ShelfView: View {
                     selection.removeAll()
                 }
             } label: {
-                Label("Leeren", systemImage: "trash")
+                Label(L10n.string(.clear), systemImage: "trash")
                     .labelStyle(.iconOnly)
             }
-            .help(bulkHelp("Auswahl entfernen", "Ablage leeren"))
+            .help(bulkHelp(L10n.string(.removeSelectedHelp), L10n.string(.clearShelfHelp)))
             .disabled(store.items.isEmpty)
 
             Button { showSettings = true } label: {
-                Label("Einstellungen", systemImage: "slider.horizontal.3")
+                Label(L10n.string(.settings), systemImage: "slider.horizontal.3")
                     .labelStyle(.iconOnly)
             }
-            .help("Einstellungen")
+            .help(L10n.string(.settings))
             .popover(isPresented: $showSettings) { settingsPopover }
         }
         .padding(.horizontal, 12)
@@ -132,7 +133,7 @@ struct ShelfView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
-            TextField("Filtern…", text: $store.searchText)
+            TextField(L10n.string(.filterPlaceholder), text: $store.searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .onSubmit { }
@@ -238,10 +239,10 @@ struct ShelfView: View {
             Image(systemName: "tray")
                 .font(.system(size: 38, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("Dateien hierher ziehen")
+            Text(L10n.string(.emptyTitle))
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
-            Text("Sammeln, kopieren oder verschieben —\nmit \(settings.hotkey.label) jederzeit einblenden.")
+            Text(L10n.string(.emptyHint, settings.hotkey.label))
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -273,7 +274,7 @@ struct ShelfView: View {
 
     private var footer: some View {
         HStack(spacing: 6) {
-            Text("\(store.totalCount) \(store.totalCount == 1 ? "Objekt" : "Objekte")")
+            Text("\(store.totalCount) \(store.totalCount == 1 ? L10n.string(.objectSingular) : L10n.string(.objectPlural))")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             if store.totalSizeBytes > 0 {
@@ -282,7 +283,7 @@ struct ShelfView: View {
                     .foregroundStyle(.tertiary)
             }
             if !selection.isEmpty {
-                Text("· \(selection.count) ausgewählt")
+                Text("· " + L10n.string(.selectedCount, selection.count))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.accentColor)
             }
@@ -299,29 +300,45 @@ struct ShelfView: View {
 
     private var settingsPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Einstellungen")
+            Text(L10n.string(.settingsTitle))
                 .font(.system(size: 12, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Opazität: \(Int(settings.panelOpacity * 100))%")
+                Text(L10n.string(.opacityLabel, Int(settings.panelOpacity * 100)))
                     .font(.system(size: 11))
                 Slider(value: $settings.panelOpacity, in: 0.3...1.0, step: 0.02)
                     .frame(width: 220)
             }
 
-            Toggle("Ablage über Neustarts behalten", isOn: $settings.persistShelf)
+            Toggle(L10n.string(.keepAcrossRestarts), isOn: $settings.persistShelf)
                 .font(.system(size: 11))
-            Toggle("Beim Start anzeigen", isOn: $settings.showAtLaunch)
+            Toggle(L10n.string(.showAtLaunch), isOn: $settings.showAtLaunch)
                 .font(.system(size: 11))
-            Toggle("Bei Anmeldung starten", isOn: $settings.launchAtLogin)
+            Toggle(L10n.string(.launchAtLogin), isOn: $settings.launchAtLogin)
                 .font(.system(size: 11))
-            Toggle("Maus schütteln öffnet Schelf", isOn: $settings.shakeToOpen)
+            Toggle(L10n.string(.shakeToOpen), isOn: $settings.shakeToOpen)
                 .font(.system(size: 11))
 
             Divider()
 
+            // Sprache
             VStack(alignment: .leading, spacing: 4) {
-                Text("Globaler Hotkey")
+                Text(L10n.string(.language))
+                    .font(.system(size: 11, weight: .medium))
+                Picker(L10n.string(.language), selection: $settings.language) {
+                    ForEach(Language.allCases) { lang in
+                        Text(lang.displayName).tag(lang)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(.system(size: 11))
+                .labelsHidden()
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.string(.globalHotkey))
                     .font(.system(size: 11, weight: .medium))
                 HStack {
                     Text(settings.hotkey.label)
@@ -330,12 +347,12 @@ struct ShelfView: View {
                         .padding(.vertical, 4)
                         .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
                     Spacer()
-                    Button("Zurücksetzen") {
+                    Button(L10n.string(.resetHotkey)) {
                         settings.hotkey = .defaultHotkey
                     }
                     .font(.system(size: 11))
                 }
-                Text("Hotkey-Neuzuweisung via Tastatur-Recorder folgt in v3.")
+                Text(L10n.string(.hotkeyHint))
                     .font(.system(size: 9))
                     .foregroundStyle(.tertiary)
             }
@@ -400,14 +417,14 @@ private struct ShelfCell: View {
         .background(selected ? Color.accentColor.opacity(0.12) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 8))
         .contextMenu {
-            Button("Vorschau") { onOpen() }
-            Button("Öffnen") { onOpenDefault() }
-            Button("Öffnen mit …") { onOpenWith() }
-            Button("Im Finder zeigen") {
+            Button(L10n.string(.preview)) { onOpen() }
+            Button(L10n.string(.open)) { onOpenDefault() }
+            Button(L10n.string(.openWith)) { onOpenWith() }
+            Button(L10n.string(.revealInFinder)) {
                 NSWorkspace.shared.activateFileViewerSelecting([item.url])
             }
             Divider()
-            Button("Aus Ablage entfernen") { onRemove() }
+            Button(L10n.string(.removeFromShelf)) { onRemove() }
         }
         // Drag-out: Datei zurück in Finder/ andere Apps ziehen.
         // WICHTIG: Das Panel nutzt isMovableByWindowBackground, daher würde

@@ -44,7 +44,7 @@ final class ShelfStore: ObservableObject {
 
         var errorDescription: String? {
             switch self {
-            case .destinationExists: return "Eine Datei mit diesem Namen existiert im Ziel bereits."
+            case .destinationExists: return L10n.string(.errorDestExists)
             case .underlying(let e): return e.localizedDescription
             }
         }
@@ -240,8 +240,8 @@ final class ShelfStore: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = true
-        panel.prompt = "Zur Ablage hinzufügen"
-        panel.title = "Dateien auswählen"
+        panel.prompt = L10n.string(.pickerAddPrompt)
+        panel.title = L10n.string(.pickerAddTitle)
         panel.begin { [weak self] resp in
             guard resp == .OK else { return }
             self?.add(urls: panel.urls)
@@ -342,21 +342,22 @@ final class ShelfStore: ObservableObject {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = copy ? "Hierher kopieren" : "Hierher verschieben"
-        panel.title = copy ? "Ablage kopieren nach …" : "Ablage verschieben nach …"
+        panel.prompt = copy ? L10n.string(.copyPrompt) : L10n.string(.movePrompt)
+        panel.title = copy ? L10n.string(.copyTitle) : L10n.string(.moveTitle)
 
         panel.begin { [weak self] resp in
             guard resp == .OK, let dest = panel.url else { return }
             guard let self = self else { return }
             // Vorab-Bestätigung: Quelle, Ziel, Anzahl + Modus anzeigen.
-            let verb = copy ? "kopieren" : "verschieben"
-            let msg = "\(targets.count) Objekt(e) nach \n\(dest.path)\n\(verb)?"
+            let verb = copy ? L10n.string(.copy) : L10n.string(.move)
+            let msg = String(format: L10n.string(.batchConfirmMsg),
+                             targets.count, dest.path, verb)
             let alert = NSAlert()
-            alert.messageText = copy ? "Kopieren bestätigen" : "Verschieben bestätigen"
+            alert.messageText = copy ? L10n.string(.confirmCopy) : L10n.string(.confirmMove)
             alert.informativeText = msg
             alert.alertStyle = .warning
-            alert.addButton(withTitle: copy ? "Kopieren" : "Verschieben")
-            alert.addButton(withTitle: "Abbrechen")
+            alert.addButton(withTitle: verb)
+            alert.addButton(withTitle: L10n.string(.cancel))
             if alert.runModal() == .alertFirstButtonReturn {
                 self.performBatch(targets: targets, to: dest, copy: copy)
             }
@@ -424,8 +425,8 @@ final class ShelfStore: ObservableObject {
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         panel.allowedContentTypes = []
-        panel.prompt = "Öffnen mit"
-        panel.title = "App wählen, um \(item.displayName) zu öffnen"
+        panel.prompt = L10n.string(.openWithPrompt)
+        panel.title = L10n.string(.openWithTitle, item.displayName)
         panel.begin { resp in
             guard resp == .OK, let chosenApp = panel.url else { return }
             NSWorkspace.shared.open([item.url], withApplicationAt: chosenApp,
